@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import psutil
+
+_log = logging.getLogger(__name__)
 
 # Fields requested from psutil in a single ``oneshot()`` for efficiency.
 _PROC_ATTRS = (
@@ -124,6 +127,8 @@ def terminate_process(pid: int, *, force: bool = False, timeout: float = 3.0) ->
         return TerminationResult(pid, False, "no such process")
 
     name = proc.name()
+    signal = "SIGKILL" if force else "SIGTERM"
+    _log.info("Requesting %s for pid %d (%r)", signal, pid, name)
     try:
         if force:
             proc.kill()
@@ -131,8 +136,10 @@ def terminate_process(pid: int, *, force: bool = False, timeout: float = 3.0) ->
             proc.terminate()
         proc.wait(timeout=timeout)
     except psutil.AccessDenied:
+        _log.warning("Access denied stopping pid %d (%r)", pid, name)
         return TerminationResult(pid, False, f"access denied stopping {name!r}")
     except psutil.TimeoutExpired:
+        _log.warning("pid %d (%r) did not exit within %gs", pid, name, timeout)
         return TerminationResult(
             pid, False, f"{name!r} did not exit within {timeout:g}s (try --force)"
         )
@@ -140,6 +147,7 @@ def terminate_process(pid: int, *, force: bool = False, timeout: float = 3.0) ->
         # It exited between the lookup and the signal: treat as success.
         pass
     verb = "killed" if force else "terminated"
+    _log.info("Successfully %s pid %d (%r)", verb, pid, name)
     return TerminationResult(pid, True, f"{verb} {name!r} (pid {pid})")
 
 

@@ -8,12 +8,15 @@ an allow-list, so there is no opportunity for command injection.
 
 from __future__ import annotations
 
+import logging
 import shutil
 import subprocess  # noqa: S404 - usage is restricted to fixed, validated arg lists.
 import sys
 from dataclasses import dataclass
 
 import psutil
+
+_log = logging.getLogger(__name__)
 
 #: Actions a caller is permitted to request. Anything else is rejected.
 VALID_ACTIONS = ("start", "stop", "restart")
@@ -63,14 +66,22 @@ def control_service(name: str, action: str) -> ServiceActionResult:
     """Start, stop or restart a service. Requires appropriate privileges."""
 
     if action not in VALID_ACTIONS:
+        _log.warning("Rejected invalid service action %r for %r", action, name)
         return ServiceActionResult(
             name, action, False, f"invalid action {action!r}; expected one of {VALID_ACTIONS}"
         )
+    _log.info("Requesting service action %r for %r", action, name)
     if sys.platform.startswith("win"):
-        return _control_service_windows(name, action)
-    if shutil.which("systemctl"):
-        return _control_service_systemd(name, action)
-    return ServiceActionResult(name, action, False, "service control unsupported on this platform")
+        result = _control_service_windows(name, action)
+    elif shutil.which("systemctl"):
+        result = _control_service_systemd(name, action)
+    else:
+        return ServiceActionResult(
+            name, action, False, "service control unsupported on this platform"
+        )
+    outcome = "succeeded" if result.success else "failed"
+    _log.info("Service action %r for %r %s", action, name, outcome)
+    return result
 
 
 # --- Windows -----------------------------------------------------------------

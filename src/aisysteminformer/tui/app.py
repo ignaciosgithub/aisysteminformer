@@ -246,14 +246,23 @@ class SystemInformerApp(App[None]):
         self.set_interval(self._refresh_interval, self._tick)
 
     def _tick(self) -> None:
-        self.query_one(PerformancePane).refresh_data()
-        self.query_one(ProcessPane).refresh_data()
-        self.query_one(ConnectionsPane).refresh_data()
-        self.query_one(DiskPane).refresh_data()
-        # Services change rarely and listing is comparatively expensive.
-        self._services_counter += 1
-        if self._services_counter % 5 == 0:
-            self.query_one(ServicesPane).refresh_data()
+        # Only the visible tab is refreshed on each tick. Polling a hidden pane
+        # would spend syscalls (process_iter, net_connections, partition scans)
+        # collecting data the user cannot see, so we skip it entirely.
+        active = self.query_one(TabbedContent).active
+        if active == "tab-performance":
+            self.query_one(PerformancePane).refresh_data()
+        elif active == "tab-processes":
+            self.query_one(ProcessPane).refresh_data()
+        elif active == "tab-network":
+            self.query_one(ConnectionsPane).refresh_data()
+        elif active == "tab-disk":
+            self.query_one(DiskPane).refresh_data()
+        elif active == "tab-services":
+            # Services change rarely and listing is comparatively expensive.
+            self._services_counter += 1
+            if self._services_counter % 5 == 0:
+                self.query_one(ServicesPane).refresh_data()
 
     def action_refresh_now(self) -> None:
         self.query_one(PerformancePane).refresh_data()

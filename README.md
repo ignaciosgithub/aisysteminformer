@@ -79,6 +79,16 @@ aisysteminformer kill <pid>             # SIGTERM a process
 aisysteminformer kill <pid> --force     # SIGKILL a process
 ```
 
+Every command accepts two global flags:
+
+```bash
+aisysteminformer --json processes -n 5   # machine-readable JSON on stdout
+aisysteminformer -v system               # info-level logs on stderr (-vv = debug)
+```
+
+`--json` prints structured output suitable for piping into `jq`; diagnostic logs
+always go to stderr so they never corrupt the JSON stream.
+
 You can also run the package directly without installing the console script:
 
 ```bash
@@ -119,12 +129,22 @@ reused by both the CLI and the TUI.
 ## Development
 
 ```bash
-ruff check src/ tests/     # lint
-mypy src/                  # type check
-pytest                     # tests
+pip install -e ".[dev]"
+pre-commit install                 # optional: run checks on every commit
+
+ruff check src/ tests/             # lint
+mypy src/                          # type check
+pytest                             # tests + coverage gate (>= 85%)
+bandit -r src/ -c pyproject.toml   # static security analysis
+pip-audit                          # dependency vulnerability audit
 ```
 
-Continuous integration runs all three on every push and pull request.
+Continuous integration runs the full suite on every push and pull request across
+Python 3.10, 3.11 and 3.12.
+
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the module layout and data flow,
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for the development workflow, and
+[`SECURITY.md`](SECURITY.md) for the security model and reporting process.
 
 ## License
 

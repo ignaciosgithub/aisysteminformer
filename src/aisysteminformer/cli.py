@@ -14,7 +14,17 @@ from rich.console import Console
 from rich.table import Table
 
 from aisysteminformer import __version__
-from aisysteminformer.core import disk, files, formatting, network, processes, services, system
+from aisysteminformer.core import (
+    disk,
+    files,
+    formatting,
+    network,
+    processes,
+    serialization,
+    services,
+    system,
+)
+from aisysteminformer.logconfig import configure_logging
 
 _console = Console()
 
@@ -25,6 +35,18 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Monitor system resources, processes, network, disk and services.",
     )
     parser.add_argument("--version", action="version", version=f"aisysteminformer {__version__}")
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="emit machine-readable JSON instead of formatted tables",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=0,
+        help="increase log verbosity (-v for info, -vv for debug); logs go to stderr",
+    )
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("tui", help="launch the interactive terminal UI (default)")
@@ -43,7 +65,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     net = sub.add_parser("network", aliases=["net"], help="list active network connections")
     net.add_argument(
-        "-k", "--kind", default="inet", help="connection kind: inet, tcp, udp (default inet)"
+        "-k",
+        "--kind",
+        default="inet",
+        choices=network.VALID_KINDS,
+        metavar="KIND",
+        help="connection kind: inet, tcp, udp, unix, all (default inet)",
     )
 
     sub.add_parser("disk", help="show disk partitions and I/O totals")
@@ -65,26 +92,35 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser = _build_parser()
     args = parser.parse_args(argv)
+    configure_logging(args.verbose)
     command = args.command or "tui"
+    as_json: bool = args.json
 
     if command == "tui":
         return _run_tui()
     if command in ("system", "sys"):
-        return _cmd_system()
+        return _cmd_system(as_json)
     if command in ("processes", "ps"):
-        return _cmd_processes(args.limit, args.sort, args.filter)
+        return _cmd_processes(args.limit, args.sort, args.filter, as_json)
     if command in ("network", "net"):
-        return _cmd_network(args.kind)
+        return _cmd_network(args.kind, as_json)
     if command == "disk":
-        return _cmd_disk()
+        return _cmd_disk(as_json)
     if command in ("services", "svc"):
-        return _cmd_services()
+        return _cmd_services(as_json)
     if command == "whohas":
-        return _cmd_whohas(args.path)
+        return _cmd_whohas(args.path, as_json)
     if command == "kill":
-        return _cmd_kill(args.pid, args.force)
+        return _cmd_kill(args.pid, args.force, as_json)
     parser.print_help()
     return 2
+
+
+def _emit_json(payload: object) -> int:
+    """Print ``payload`` as JSON on stdout and return a success exit code."""
+
+    print(serialization.dumps(payload))
+    return 0
 
 
 def _run_tui() -> int:
@@ -98,8 +134,10 @@ def _run_tui() -> int:
     return 0
 
 
-def _cmd_system() -> int:
+def _cmd_system(as_json: bool = False) -> int:
     snap = system.snapshot()
+    if as_json:
+        return _emit_json(snap)
     _console.print(f"[bold]{snap.hostname}[/]  {snap.platform}")
     _console.print(f"Uptime: {formatting.human_duration(snap.uptime_seconds)}")
     load = snap.cpu.load_average
@@ -123,8 +161,12 @@ def _cmd_system() -> int:
     return 0
 
 
-def _cmd_processes(limit: int, sort_by: str, name_filter: str | None) -> int:
+def _cmd_processes(
+    limit: int, sort_by: str, name_filter: str | None, as_json: bool = False
+) -> int:
     rows = processes.list_processes(sort_by=sort_by, limit=limit, name_filter=name_filter)
+    if as_json:
+        return _emit_json(rows)
     table = Table(title=f"Top {len(rows)} processes (by {sort_by})")
     table.add_column("PID", justify="right")
     table.add_column("Name")
@@ -149,8 +191,10 @@ def _cmd_processes(limit: int, sort_by: str, name_filter: str | None) -> int:
     return 0
 
 
-def _cmd_network(kind: str) -> int:
+def _cmd_network(kind: str, as_json: bool = False) -> int:
     conns = network.list_connections(kind=kind)
+    if as_json:
+        return _emit_json(conns)
     table = Table(title=f"Network connections ({kind})")
     table.add_column("Proto")
     table.add_column("Local address")
@@ -173,7 +217,11 @@ def _cmd_network(kind: str) -> int:
     return 0
 
 
-def _cmd_disk() -> int:
+def _cmd_disk(as_json: bool = False) -> int:
+    partitions = disk.list_partitions()
+    io = disk.DiskRateMonitor().poll()
+    if as_json:
+        return _emit_json({"partitions": partitions, "io": io})
     table = Table(title="Disk partitions")
     table.add_column("Device")
     table.add_column("Mount")
@@ -181,7 +229,7 @@ def _cmd_disk() -> int:
     table.add_column("Used", justify="right")
     table.add_column("Total", justify="right")
     table.add_column("Use%", justify="right")
-    for part in disk.list_partitions():
+    for part in partitions:
         table.add_row(
             part.device,
             part.mountpoint,
@@ -192,7 +240,6 @@ def _cmd_disk() -> int:
         )
     _console.print(table)
 
-    io = disk.DiskRateMonitor().poll()
     if io:
         io_table = Table(title="Disk I/O totals")
         io_table.add_column("Disk")
@@ -208,11 +255,15 @@ def _cmd_disk() -> int:
     return 0
 
 
-def _cmd_services() -> int:
+def _cmd_services(as_json: bool = False) -> int:
     if not services.services_supported():
+        if as_json:
+            return _emit_json([])
         _console.print("[yellow]Service inspection is not available on this platform.[/]")
         return 0
     rows = services.list_services()
+    if as_json:
+        return _emit_json(rows)
     table = Table(title=f"Services ({len(rows)})")
     table.add_column("Name")
     table.add_column("Status")
@@ -229,8 +280,10 @@ def _cmd_services() -> int:
     return 0
 
 
-def _cmd_whohas(path: str) -> int:
+def _cmd_whohas(path: str, as_json: bool = False) -> int:
     holders = files.find_processes_using_path(path)
+    if as_json:
+        return _emit_json(holders)
     if not holders:
         _console.print(
             f"No accessible process references [bold]{path}[/] "
@@ -248,8 +301,11 @@ def _cmd_whohas(path: str) -> int:
     return 0
 
 
-def _cmd_kill(pid: int, force: bool) -> int:
+def _cmd_kill(pid: int, force: bool, as_json: bool = False) -> int:
     result = processes.terminate_process(pid, force=force)
+    if as_json:
+        print(serialization.dumps(result))
+        return 0 if result.success else 1
     if result.success:
         _console.print(f"[green]{result.message}[/]")
         return 0

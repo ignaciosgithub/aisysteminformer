@@ -13,6 +13,21 @@ _SOCKET_TYPE_NAMES = {
     socket.SOCK_DGRAM: "UDP",
 }
 
+#: Connection kinds accepted by :func:`psutil.net_connections`.
+VALID_KINDS = (
+    "inet",
+    "inet4",
+    "inet6",
+    "tcp",
+    "tcp4",
+    "tcp6",
+    "udp",
+    "udp4",
+    "udp6",
+    "unix",
+    "all",
+)
+
 
 @dataclass(frozen=True)
 class Connection:
@@ -71,8 +86,9 @@ def list_connections(*, kind: str = "inet") -> list[Connection]:
         pid = conn.pid
         proc_name = ""
         if pid is not None:
-            proc_name = name_cache.get(pid, "")
-            if not proc_name:
+            if pid in name_cache:
+                proc_name = name_cache[pid]
+            else:
                 try:
                     proc_name = psutil.Process(pid).name()
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
